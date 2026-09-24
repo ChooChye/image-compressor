@@ -296,6 +296,31 @@ fn keeps_original_only_when_it_is_a_valid_answer() {
 }
 
 #[test]
+fn strip_all_refuses_to_keep_an_original_with_an_icc_profile() {
+    let small_input = [0u8; 100];
+    let with_icc = || {
+        let mut pipeline = MockPipeline::opaque();
+        pipeline.image = pipeline.image.with_icc_profile(Some(vec![1, 2, 3, 4]));
+        Engine::new(pipeline)
+            .with_codec(MockCodec::new(ImageFormat::Png, |l| 500 + l as usize))
+            .with_metric(quality())
+    };
+
+    // The original still carries the ICC profile the caller asked to strip → must re-encode.
+    let mut req = request(&[ImageFormat::Png], 0.5);
+    req.metadata = MetadataPolicy::StripAll;
+    let result = with_icc().optimize(&small_input, &req).unwrap();
+    assert!(matches!(result.selection, Selection::Encoded { .. }));
+
+    // Keeping the ICC profile is exactly what the original already does.
+    let mut req = request(&[ImageFormat::Png], 0.5);
+    req.metadata = MetadataPolicy::KeepIccOnly;
+    let result = with_icc().optimize(&small_input, &req).unwrap();
+    assert_eq!(result.selection, Selection::KeptOriginal { format: ImageFormat::Png });
+    assert_eq!(result.output, small_input);
+}
+
+#[test]
 fn budget_caps_evaluations() {
     let codec = MockCodec::new(ImageFormat::WebP, |l| 100 + l as usize);
     let engine = Engine::new(MockPipeline::opaque()).with_codec(codec).with_metric(quality());
@@ -374,6 +399,17 @@ mod budget {
         assert_eq!(r.level, 40);
         // 5 levels (60..=40) at each of 3 scales.
         assert_eq!(r.attempts, 15);
+    }
+
+    #[test]
+    fn zero_level_step_is_treated_as_one() {
+        // A literal step of 0 would never leave the start level.
+        let opts = BudgetOptions { max_bytes: Some(100), level_step: 0, max_downscales: 0, ..Default::default() };
+        let r = encode_within_budget(&MockPipeline::opaque(), &codec(), &image(), &opts).unwrap();
+        assert!(!r.within_budget);
+        assert_eq!(r.level, 40);
+        // Every level in 60..=40, one at a time.
+        assert_eq!(r.attempts, 21);
     }
 
     #[test]

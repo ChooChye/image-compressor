@@ -17,6 +17,7 @@ pub struct BudgetOptions {
     pub level: u32,
     /// Lowest level the budget may push down to before downscaling.
     pub min_level: u32,
+    /// How far each over-budget attempt lowers the level. A step of 0 is treated as 1.
     pub level_step: u32,
     /// `None` disables the budget: exactly one encode at `level`.
     pub max_bytes: Option<u64>,
@@ -61,6 +62,8 @@ pub fn encode_within_budget(
     let axis = codec.quality_axis();
     let clamp = |level: u32| level.clamp(axis.min, axis.max);
     let (start, floor) = (clamp(options.level), clamp(options.min_level.min(options.level)));
+    // A zero step would never reach the floor and loop forever.
+    let step = options.level_step.max(1);
     let fits = |bytes: usize| options.max_bytes.is_none_or(|max| bytes as u64 <= max);
 
     let mut attempts = 0;
@@ -85,7 +88,7 @@ pub fn encode_within_budget(
             if level == floor {
                 break;
             }
-            level = level.saturating_sub(options.level_step).max(floor);
+            level = level.saturating_sub(step).max(floor);
         }
 
         if downscale == options.max_downscales {

@@ -15,6 +15,10 @@ import numpy as np
 from analyze_bench import GATE, HELD_OUT, bd_rate, fixed_curve, load
 
 
+def format_bd(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:+.1f}%"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("runs", type=Path, nargs="+")
@@ -39,7 +43,7 @@ def main() -> None:
             anchor_curve, anchor_ms = curve, ms
             cells = ["anchor"] * len(metrics)
         else:
-            cells = [f"{bd_rate(anchor_curve, curve, m):+.1f}%" for m in metrics]
+            cells = [format_bd(bd_rate(anchor_curve, curve, m)) for m in metrics]
         print(f"| {run.name} | {encoder.split(' ', 1)[1]} | " + " | ".join(cells) + f" | {ms / anchor_ms:.2f}x |")
 
 

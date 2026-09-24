@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use clap::Args as ClapArgs;
 use rayon::prelude::*;
 use serde::Serialize;
-use smartimg_codecs::Codec;
+use smartimg_codecs::{Codec, QualityAxis};
 use smartimg_codecs::avif::{AvifCodec, AvifConfig};
 use smartimg_codecs::webp::WebpCodec;
 use smartimg_core::budget::{BudgetOptions, encode_within_budget};
@@ -47,11 +47,11 @@ pub struct Args {
     max_bytes: u64,
     #[arg(long, value_delimiter = ',', default_values = ["avif", "webp"])]
     formats: Vec<Format>,
-    /// AVIF quality 0-100 (libavif). 60 is high quality for photos.
-    #[arg(long, default_value_t = 60)]
+    /// AVIF quality 0-100 (libavif); values outside the supported 20-95 are clamped. 60 is high quality for photos.
+    #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u32).range(0..=100))]
     avif_quality: u32,
-    /// WebP quality 0-100.
-    #[arg(long, default_value_t = 80)]
+    /// WebP quality 0-100; values outside the supported 10-95 are clamped.
+    #[arg(long, default_value_t = 80, value_parser = clap::value_parser!(u32).range(0..=100))]
     webp_quality: u32,
     /// Extra responsive widths, e.g. `640,1280,1920`. Widths at or above the main width are skipped.
     #[arg(long, value_delimiter = ',')]
@@ -68,9 +68,17 @@ pub struct Args {
     /// libavif speed, 0 (slowest, smallest) to 10.
     #[arg(long, default_value_t = 6)]
     avif_speed: i32,
-    /// Images processed in parallel. Defaults to half the CPU cores.
-    #[arg(long)]
+    /// Images processed in parallel (at least 1). Defaults to half the CPU cores.
+    #[arg(long, value_parser = parse_jobs)]
     jobs: Option<usize>,
+}
+
+fn parse_jobs(s: &str) -> Result<usize, String> {
+    match s.trim().parse::<usize>() {
+        Ok(0) => Err("must be at least 1".into()),
+        Ok(n) => Ok(n),
+        Err(_) => Err(format!("invalid number `{s}`")),
+    }
 }
 
 fn parse_bytes(s: &str) -> Result<u64, String> {
@@ -111,7 +119,17 @@ fn is_image(path: &Path, suffix: &str) -> bool {
         .and_then(|e| e.to_str())
         .is_some_and(|e| IMAGE_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()));
     let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-    ext_ok && !stem.ends_with(suffix) && !stem.contains(&format!("{suffix}-")) && !OUTPUT_MARKERS.iter().any(|m| stem.contains(m))
+    // An empty suffix would match every stem; the overwrite guard in `process_inner` covers that case.
+    let own_output = !suffix.is_empty() && (stem.ends_with(suffix) || stem.contains(&format!("{suffix}-")));
+    ext_ok && !own_output && !OUTPUT_MARKERS.iter().any(|m| stem.contains(m))
+}
+
+/// Clamps a requested 0-100 quality into the codec's supported range, with a note when it had to.
+fn start_level(ext: &str, requested: u32, axis: QualityAxis) -> (u32, Option<String>) {
+    let level = requested.clamp(axis.min, axis.max);
+    let note = (level != requested)
+        .then(|| format!("{ext} quality {requested} is outside the supported range {}-{}; using {level}", axis.min, axis.max));
+    (level, note)
 }
 
 fn collect(args: &Args) -> Result<Vec<PathBuf>, String> {
@@ -188,7 +206,7 @@ pub fn run(args: Args) -> Result<(), String> {
     }
 
     let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
-    let jobs = args.jobs.unwrap_or((cores / 2).max(1)).min(files.len());
+    let jobs = args.jobs.unwrap_or(cores / 2).min(files.len()).max(1);
     let encoder_threads = (cores / jobs).max(1) as i32;
     let encoders = Encoders {
         pipeline: ImageRsPipeline::default(),
@@ -301,9 +319,11 @@ fn process_inner(path: &Path, name: &str, args: &Args, enc: &Encoders, report: &
         ..Default::default()
     };
 
-    for (codec, quality) in &enc.codecs {
+    for (codec, requested) in &enc.codecs {
         let ext = codec.format().extension();
-        let result = encode_within_budget(&enc.pipeline, codec.as_ref(), &main, &budget(*quality)).map_err(|e| e.to_string())?;
+        let (quality, note) = start_level(ext, *requested, codec.quality_axis());
+        report.warnings.extend(note);
+        let result = encode_within_budget(&enc.pipeline, codec.as_ref(), &main, &budget(quality)).map_err(|e| e.to_string())?;
         let out = dir.join(format!("{name}{}.{ext}", args.suffix));
         if out.canonicalize().ok() == path.canonicalize().ok() {
             return Err(format!("refusing to overwrite the input {}", path.display()));
@@ -312,7 +332,7 @@ fn process_inner(path: &Path, name: &str, args: &Args, enc: &Encoders, report: &
 
         if !result.within_budget {
             report.warnings.push(format!("{ext} is still over the size cap ({} bytes)", result.encoded.bytes.len()));
-        } else if result.level < *quality {
+        } else if result.level < quality {
             report.warnings.push(format!("{ext} quality lowered {quality} -> {} to fit the cap", result.level));
         }
         if result.dimensions != main_dims {
@@ -340,7 +360,7 @@ fn process_inner(path: &Path, name: &str, args: &Args, enc: &Encoders, report: &
 
         for &width in &widths {
             let image = resize(scaled(report.source, width))?;
-            let result = encode_within_budget(&enc.pipeline, codec.as_ref(), &image, &budget(*quality)).map_err(|e| e.to_string())?;
+            let result = encode_within_budget(&enc.pipeline, codec.as_ref(), &image, &budget(quality)).map_err(|e| e.to_string())?;
             let out = dir.join(format!("{name}{}-{width}.{ext}", args.suffix));
             std::fs::write(&out, &result.encoded.bytes).map_err(|e| format!("{}: {e}", out.display()))?;
             report.variants.push(FileReport {
@@ -468,6 +488,31 @@ mod tests {
         assert!(!is_image(Path::new("a/hero_web-640.webp"), "_web"));
         assert!(!is_image(Path::new("a/hero_compressed.jpg"), "_web"));
         assert!(!is_image(Path::new("a/Thumbs.db"), "_web"));
+    }
+
+    #[test]
+    fn empty_suffix_keeps_inputs() {
+        assert!(is_image(Path::new("a/hero.jpg"), ""));
+        assert!(is_image(Path::new("a/hero-640.png"), ""));
+        assert!(!is_image(Path::new("a/hero_compressed.jpg"), ""));
+    }
+
+    #[test]
+    fn clamps_quality_to_codec_axis() {
+        let axis = QualityAxis { min: 20, max: 95 };
+        assert_eq!(start_level("avif", 60, axis), (60, None));
+        assert_eq!(start_level("avif", 20, axis), (20, None));
+        let (level, note) = start_level("avif", 10, axis);
+        assert_eq!(level, 20);
+        assert!(note.unwrap().contains("avif quality 10 is outside the supported range 20-95; using 20"));
+        assert_eq!(start_level("webp", 100, QualityAxis { min: 10, max: 95 }).0, 95);
+    }
+
+    #[test]
+    fn rejects_zero_jobs() {
+        assert!(parse_jobs("0").is_err());
+        assert!(parse_jobs("x").is_err());
+        assert_eq!(parse_jobs("4").unwrap(), 4);
     }
 
     #[test]

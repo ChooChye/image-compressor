@@ -79,7 +79,7 @@ struct Args {
     #[arg(long, value_delimiter = ',', default_values = ["ssim", "ssimulacra2", "butteraugli"])]
     metrics: Vec<MetricArg>,
     /// Level step. Use 1 so the engine's search can be replayed exactly.
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
     step: u32,
     #[arg(long, default_value_t = 6)]
     avif_speed: i32,

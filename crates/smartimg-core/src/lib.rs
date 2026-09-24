@@ -11,8 +11,8 @@ use smartimg_codecs::{Codec, CodecError, EncodeSettings};
 use smartimg_metrics::Metric;
 use smartimg_pipeline::{ImagePipeline, PipelineError};
 use smartimg_types::{
-    AlphaPolicy, Evaluation, FormatOutcome, FormatReport, Image, ImageFormat, OptimizationRequest,
-    OptimizationResult, QualityGate, Selection,
+    AlphaPolicy, Evaluation, FormatOutcome, FormatReport, Image, ImageFormat, MetadataPolicy,
+    OptimizationRequest, OptimizationResult, QualityGate, Selection,
 };
 use thiserror::Error;
 
@@ -59,6 +59,9 @@ impl<P: ImagePipeline> Engine<P> {
         let source_dimensions = source.image.dimensions();
         let output_dimensions = request.dimensions.target(source_dimensions);
         let resized = output_dimensions != source_dimensions;
+        // `has_strippable_metadata` covers EXIF/XMP only; StripAll also asks for the ICC profile to go.
+        let must_strip_metadata = source.has_strippable_metadata
+            || (request.metadata == MetadataPolicy::StripAll && source.image.icc_profile().is_some());
         let reference = if resized {
             self.pipeline.resize(&source.image, output_dimensions)?
         } else {
@@ -135,7 +138,7 @@ impl<P: ImagePipeline> Engine<P> {
 
         // The original is itself a valid answer when nothing about it has to change.
         let keep_original = !resized
-            && !source.has_strippable_metadata
+            && !must_strip_metadata
             && best.bytes >= input.len() as u64
             && source.format.is_some_and(|f| request.allowed_formats.contains(&f));
 

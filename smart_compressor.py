@@ -76,6 +76,10 @@ class Source:
     image: Image.Image
     icc_profile: bytes | None
     format: str | None
+    # The input file carries EXIF/XMP, which encoded outputs always strip.
+    has_metadata: bool = False
+    # Pixels differ from the input file's own rendering (e.g. alpha was flattened).
+    altered: bool = False
 
 
 @dataclass(frozen=True)
@@ -92,14 +96,37 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
+METADATA_INFO_KEYS = ("exif", "xmp", "XML:com.adobe.xmp")
+
+
+def rgb_profile(icc: bytes | None) -> bytes | None:
+    """Return the ICC profile only if it describes RGB data.
+
+    Pixels are always normalized to RGB(A), so a GRAY/CMYK/Lab profile would be
+    mismatched. The colour-space signature lives at bytes 16..20 of the ICC header
+    (mirrors `rgb_profile()` in crates/smartimg-pipeline/src/image_rs.rs).
+    """
+    if icc and len(icc) >= 20 and icc[16:20] == b"RGB ":
+        return icc
+    return None
+
+
+def has_exif_or_xmp(im: Image.Image) -> bool:
+    if any(im.info.get(key) for key in METADATA_INFO_KEYS):
+        return True
+    try:
+        return len(im.getexif()) > 0
+    except Exception:  # Unparseable EXIF; raw info keys above already cover real payloads.
+        return False
+
+
 def load_normalized(path: Path, *, flatten_alpha: bool = False) -> Source:
     Image.MAX_IMAGE_PIXELS = 200_000_000
     with Image.open(path) as im:
         source_format = PILLOW_FORMATS.get(im.format or "")
-        icc = im.info.get("icc_profile")
-        if im.mode == "CMYK":
-            # A CMYK profile is invalid once pixels are converted to RGB.
-            icc = None
+        icc = rgb_profile(im.info.get("icc_profile"))
+        has_metadata = has_exif_or_xmp(im)
+        altered = False
         image = ImageOps.exif_transpose(im)
         if image.mode in ("P", "LA", "PA"):
             image = image.convert("RGBA")
@@ -110,11 +137,12 @@ def load_normalized(path: Path, *, flatten_alpha: bool = False) -> Source:
             if flatten_alpha and alpha_min < 255:
                 background = Image.new("RGBA", image.size, (255, 255, 255, 255))
                 image = Image.alpha_composite(background, image)
+                altered = True
             if alpha_min == 255 or flatten_alpha:
                 # An alpha channel that is fully opaque (or flattened) carries no information;
                 # dropping it lets alpha-less formats like JPEG compete.
                 image = image.convert("RGB")
-        return Source(image.copy(), icc, source_format)
+        return Source(image.copy(), icc, source_format, has_metadata=has_metadata, altered=altered)
 
 
 def entropy(gray: np.ndarray) -> float:
@@ -396,10 +424,13 @@ def optimize(input_path: Path, output_path: Path | None, *, target: float, max_d
         winner = min(candidates, key=lambda c: c.bytes)
 
         # Never emit something larger than the input when the original is itself a valid
-        # answer (same dimensions, allowed format).
+        # answer (same dimensions, allowed format, no EXIF/XMP that outputs would strip,
+        # and pixels not altered by flattening).
         kept_original = (
             not resized
             and source.format in formats
+            and not source.has_metadata
+            and not source.altered
             and winner.bytes >= original_bytes
         )
         if kept_original:

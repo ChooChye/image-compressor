@@ -199,7 +199,8 @@ impl DimensionPolicy {
             DimensionPolicy::MaxBox { width, height } => (f64::from(width) / w).min(f64::from(height) / h),
             DimensionPolicy::MaxMegapixels { megapixels } => (megapixels * 1_000_000.0 / (w * h)).sqrt(),
         };
-        if !(scale < 1.0) {
+        // NaN (e.g. a zero megapixel cap) means no valid downscale: keep the source size.
+        if scale.is_nan() || scale >= 1.0 {
             return source;
         }
         let scaled = |v: f64| ((v * scale).round() as u32).max(1);

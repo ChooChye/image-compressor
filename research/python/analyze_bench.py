@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,6 +47,12 @@ class Sweep:
     levels: list[int]
     rows: dict[int, dict]
 
+    @property
+    def contiguous(self) -> bool:
+        """True when every integer level between the first and last is present, which the
+        engine replay needs (it probes arbitrary midpoints)."""
+        return bool(self.levels) and len(self.levels) == self.levels[-1] - self.levels[0] + 1
+
 
 def load(run: Path):
     images: dict[str, dict] = {}
@@ -63,6 +70,27 @@ def load(run: Path):
     return images, sweeps
 
 
+def usable_images(images, sweeps, formats=FORMATS) -> tuple[list[str], list[str]]:
+    """Split images into (usable, excluded). An image is usable when every format has a
+    contiguous sweep over that format's full level range (the widest range seen in the run).
+    Anything else (runner --step != 1, a partially flushed last image, a missing format) is
+    excluded as a whole so every strategy is evaluated on the same image set."""
+    expected: dict[str, tuple[int, int]] = {}
+    for (_, fmt), sweep in sweeps.items():
+        lo, hi = expected.get(fmt, (sweep.levels[0], sweep.levels[-1]))
+        expected[fmt] = (min(lo, sweep.levels[0]), max(hi, sweep.levels[-1]))
+
+    def complete(image: str, fmt: str) -> bool:
+        sweep = sweeps.get((image, fmt))
+        return (sweep is not None and sweep.contiguous
+                and (sweep.levels[0], sweep.levels[-1]) == expected[fmt])
+
+    usable, excluded = [], []
+    for image in sorted(images):
+        (usable if all(complete(image, f) for f in formats) else excluded).append(image)
+    return usable, excluded
+
+
 # --- strategies ---------------------------------------------------------------------------
 
 def passes(row: dict, threshold: float, gate: str = GATE, direction: int = +1) -> bool:
@@ -71,6 +99,8 @@ def passes(row: dict, threshold: float, gate: str = GATE, direction: int = +1) -
 
 def engine_search(sweep: Sweep, threshold: float, gate: str = GATE, direction: int = +1):
     """Mirror of smartimg-core FormatSearch::run. Returns (row or None, evaluations)."""
+    if not sweep.contiguous:
+        raise ValueError("engine replay needs every integer level (run smartimg-bench with --step 1)")
     lo, hi = sweep.levels[0], sweep.levels[-1]
     samples: dict[int, dict] = {}
 
@@ -146,6 +176,8 @@ def aggregate(parameter, chosen: list[tuple[dict, int, bool]]) -> Point:
 
 
 def fixed_curve(images, sweeps, fmt):
+    if not images:
+        return []
     levels = sorted(set.intersection(*(set(sweeps[(i, fmt)].levels) for i in images)))
     return [aggregate(level, [(sweeps[(i, fmt)].rows[level], 1, False) for i in images]) for level in levels]
 
@@ -339,9 +371,22 @@ def main() -> None:
               + f". Max dimension {run_config['max_dimension']}px. Gate metric `{GATE}`; held-out metrics "
               + ", ".join(f"`{m}`" for m in HELD_OUT) + "."]
 
+    usable, excluded = usable_images(images, sweeps)
+    if excluded:
+        if not any(s.contiguous for s in sweeps.values()) or run_config.get("step", 1) != 1:
+            step = f" (run step {run_config['step']})" if "step" in run_config else ""
+            reason = (f"no image has a contiguous level sweep{step}; "
+                      "engine replay requires `smartimg-bench --step 1`")
+        else:
+            reason = "incomplete or non-contiguous level sweeps (e.g. an interrupted run)"
+        warning = f"Excluded {len(excluded)} of {len(images)} images: {reason}."
+        print(f"warning: {warning}", file=sys.stderr)
+        report.append(f"\n**Warning:** {warning}")
+
     summary: dict = {}
     by_split = defaultdict(list)
-    for image, meta in images.items():
+    for image in usable:
+        meta = images[image]
         by_split[meta["split"]].append(image)
         by_split[f"{meta['split']} / {meta['corpus']}"].append(image)
     for label in ["test", "dev", *sorted(k for k in by_split if "/" in k and k.startswith("test"))]:
