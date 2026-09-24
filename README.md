@@ -91,6 +91,23 @@ Then:
 webimg "/Users/choochye/Developer/jrd/1. Master Planning/Jade Hills MCP"
 ```
 
+### Finder right-click (Quick Action)
+
+```bash
+integrations/macos/install-quick-action.sh
+```
+
+Then in Finder, right-click one or more images, or a folder, and open **Quick Actions**:
+
+| Action | Output |
+|---|---|
+| **Compress for Web** | AVIF + WebP, same settings as `webimg`. Images from the same folder share one report. |
+| **Compress (Keep Format)** | Same format as the original (JPEG stays JPEG, PNG stays PNG; WebP and AVIF also supported), via `smart_compressor.py`. The file keeps its name, except `.jpeg` becomes `.jpg`. Resized to 2560 px on the longest side, and quality is lowered only while SSIM stays at 0.99 or higher (visually identical). Other formats such as GIF and HEIC are skipped. |
+
+Both write into a `compressed/` folder: inside the folder you selected (subfolders not included), or next to the images you selected. The originals are never touched. A notification appears when it's done, and the output folder opens. The full output is logged to `~/Library/Logs/smartimg-quick-action.log`. If anything fails, the log opens in Console.
+
+To change settings, edit `integrations/macos/compress-for-web.sh` or `compress-keep-format.sh` (`target`, `max_dimension` at the top), then re-run the install script. The installer also turns the actions on; if one still doesn't show, tick it under **Quick Actions > Customize…**, or relaunch Finder.
+
 ### Using the output on a website
 
 The browser downloads only the first format it supports, so the fallback costs visitors nothing:
