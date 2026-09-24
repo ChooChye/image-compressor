@@ -1,0 +1,16 @@
+[package]
+name = "smartimg-metrics"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+ssimulacra2 = ["dep:ssimulacra2"]
+butteraugli = ["dep:butteraugli"]
+
+[dependencies]
+thiserror.workspace = true
+smartimg-types = { path = "../smartimg-types" }
+ssimulacra2 = { version = "0.5", optional = true }
+butteraugli = { version = "0.9", optional = true }

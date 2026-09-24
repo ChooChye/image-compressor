@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/smartimg-core",
+  "crates/smartimg-types",
+  "crates/smartimg-codecs",
+  "crates/smartimg-metrics",
+  "crates/smartimg-pipeline",
+  "apps/cli",
+  "benchmarks/runner",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+
+[workspace.dependencies]
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }

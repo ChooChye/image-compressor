@@ -1,0 +1,52 @@
+# Rust build output. Cargo.lock is committed: this workspace ships binaries.
+/target/
+**/*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Benchmark inputs and outputs are never committed; corpora may contain licensed or
+# client-owned images. Manifests record paths and hashes for reproducibility instead.
+/benchmarks/data/
+/benchmarks/results/
+
+# Compressor outputs from local runs
+*.optimized.*
+*_compressed.*
+*_web.avif
+*_web.webp
+*_web-*.avif
+*_web-*.webp
+compressed/
+web-report.json
+picture-snippets.html
+
+# Logs
+*.log
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
+._*
+
+# Windows
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*~
+
+plan.md

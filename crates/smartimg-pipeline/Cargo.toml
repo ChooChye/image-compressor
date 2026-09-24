@@ -1,0 +1,16 @@
+[package]
+name = "smartimg-pipeline"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+# Pure-Rust pipeline backed by the `image` crate: the M2 stand-in until the libvips
+# pipeline (linear-light resize, full color management) lands.
+image-rs = ["dep:image"]
+
+[dependencies]
+thiserror.workspace = true
+smartimg-types = { path = "../smartimg-types" }
+image = { version = "0.25", optional = true, default-features = false, features = ["jpeg", "png", "webp", "tiff"] }

@@ -1,0 +1,20 @@
+[package]
+name = "smartimg-codecs"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+# Native adapters link system libraries found through pkg-config. They are opt-in so the
+# core engine and its tests build without any native codec installed.
+native-avif = ["dep:bindgen", "dep:pkg-config"]
+native-webp = ["dep:bindgen", "dep:pkg-config"]
+
+[dependencies]
+thiserror.workspace = true
+smartimg-types = { path = "../smartimg-types" }
+
+[build-dependencies]
+bindgen = { version = "0.72", optional = true }
+pkg-config = { version = "0.3", optional = true }
